@@ -35,7 +35,13 @@ let bonding_dir = "/proc/net/bonding/"
 let dhcp6c = "/sbin/dhcp6c"
 let fcoedriver = ref "/opt/xensource/libexec/fcoe_driver"
 
-let call_script ?(log_successful_output=false) script args =
+let check_output readme_fd =
+	let output = String.make 16384 '\000' in
+	let n = Unix.read readme_fd output 0 (String.length output) in
+	Unix.close readme_fd;
+	String.sub output 0 n
+
+let call_script ?(log_successful_output=false) ?(timeout=0.0) script args =
 	try
 		Unix.access script [ Unix.X_OK ];
 		(* Use the same $PATH as xapi *)
@@ -46,11 +52,16 @@ let call_script ?(log_successful_output=false) script args =
                 let pid = Forkhelpers.safe_close_and_exec ~env None (Some writeme) None [] script args in
 		Unix.close writeme;
 		(* assume output is never larger than a pipe buffer *)
-		let (_: (int * Unix.process_status)) = Forkhelpers.waitpid pid in
-		let output = String.make 16384 '\000' in
-		let n = Unix.read readme output 0 (String.length output) in
-		Unix.close readme;
-		String.sub output 0 n
+		if timeout <> 0.0 then
+			let ((pid_return, _): (int * Unix.process_status)) = Forkhelpers.waitpid_nohang pid timeout in
+			if pid_return == 0 then begin
+				debug "Timeout occurred while calling %s %s" script (String.concat " " args);
+				""
+			end
+			else check_output readme
+		else
+			let (_: (int * Unix.process_status)) = Forkhelpers.waitpid pid in
+			check_output readme
 	with
 	| Unix.Unix_error (e, a, b) ->
 		error "Caught unix error: %s [%s, %s]" (Unix.error_message e) a b;
@@ -549,7 +560,7 @@ end
 
 module Fcoe = struct
 	let call ?(log=false) args =
-		call_script ~log_successful_output:log !fcoedriver args
+		call_script ~log_successful_output:log ~timeout:5.0 !fcoedriver args
 
 	let get_capabilities name =
 		try
