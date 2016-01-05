@@ -992,8 +992,12 @@ module Dhcp6c = struct
 		Printf.sprintf "/var/run/dhcp6c-%s.pid" interface
 
 	let start interface =
-		ignore (call_script dhcp6c [interface])
+		try
+			ignore (call_script dhcp6c [interface])
+		with _ -> ()
 
 	let stop interface =
-		ignore (call_script dhcp6c ["-r"; "all"; interface])
+		try
+			ignore (call_script dhcp6c ["-r"; "all"; interface])
+		with _ -> ()
 end
