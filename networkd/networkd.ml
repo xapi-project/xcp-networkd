@@ -94,15 +94,15 @@ let _ =
 		~rpc_fn:(Server.process ())
 		() in
 
-	Xcp_service.maybe_daemonize ~start_fn:(fun () ->
-		Debug.set_facility Syslog.Local5;
+	Xcp_service.maybe_daemonize ();
 
-		(* We should make the following configurable *)
-		Debug.disable "http";
+	Debug.set_facility Syslog.Local5;
 
-		handle_shutdown ();
-		Debug.with_thread_associated "main" start server
-	) ();
+	(* We should make the following configurable *)
+	Debug.disable "http";
+
+	handle_shutdown ();
+	Debug.with_thread_associated "main" start server;
 
 	while true do
 		Thread.delay 300.;
