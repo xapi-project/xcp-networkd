@@ -214,6 +214,14 @@ info "Found at [ %s ]" (String.concat ", " (List.map string_of_int indices));
 		if is_up dev then
 			ignore (link_set dev ["down"])
 
+	let with_link_down dev f =
+		let up = is_up dev in
+		if up then
+			ignore (link_set dev ["down"]);
+		f ();
+		if up then
+			link_set_up dev
+
 	let link ?(version=V46) dev attr =
 		let v = string_of_version version in
 		let output = call (v @ ["link"; "show"; "dev"; dev]) in
@@ -402,6 +410,74 @@ module Linux_bonding = struct
 		end else
 			error "Bond master %s does not exist; cannot destroy it" name
 
+	let get_bond_slaves master =
+		let path = Sysfs.getpath master "bonding/slaves" in
+		let slaves = Sysfs.read_one_line path in
+		if slaves = "" then
+			[]
+		else
+			String.split ' ' slaves
+
+	let add_bond_slaves master slaves =
+		debug "Adding slaves %s to bond %s" (String.concat ", " slaves) master;
+		List.iter (fun slave ->
+			try
+				Ip.with_link_down slave (fun () ->
+					Sysfs.write_one_line (Sysfs.getpath master "bonding/slaves") ("+" ^ slave)
+				)
+			with _ ->
+				error "Failed to add slave %s to bond %s" slave master
+		) slaves
+
+	let remove_bond_slaves master slaves =
+		debug "Removing slaves %s from bond %s" (String.concat ", " slaves) master;
+		List.iter (fun slave ->
+			try
+				Ip.with_link_down slave (fun () ->
+					Sysfs.write_one_line (Sysfs.getpath master "bonding/slaves") ("-" ^ slave)
+				)
+			with _ ->
+				error "Failed to remove slave %s from bond %s" slave master
+		) slaves
+
+	let set_bond_slaves master slaves =
+		if is_bond_device master then
+			let current_slaves = get_bond_slaves master in
+			let slaves_to_remove = List.set_difference current_slaves slaves in
+			let slaves_to_add = List.set_difference slaves current_slaves in
+			remove_bond_slaves master slaves_to_remove;
+			add_bond_slaves master slaves_to_add
+		else
+			error "Bond %s does not exist; cannot set slaves" master
+
+	let with_slaves_removed master f =
+		if is_bond_device master then
+			try
+				let slaves = get_bond_slaves master in
+				remove_bond_slaves master slaves;
+				f ();
+				add_bond_slaves master slaves
+			with _ ->
+				error "Failed to remove or re-add slaves from bond %s" master
+		else
+			error "Bond %s does not exist; cannot remove/add slaves" master
+
+	let get_bond_master_of slave =
+		try
+			let master_symlink = Sysfs.getpath slave "master" in
+			let master_path = Unix.readlink master_symlink in
+			let slaves_path = Filename.concat master_symlink "bonding/slaves" in
+			Unix.access slaves_path [ Unix.F_OK ];
+			Some (List.hd (List.rev (String.split '/' master_path)))
+		with _ -> None
+
+	let get_bond_active_slave master =
+		try
+			Some (Sysfs.read_one_line (Sysfs.getpath master ("bonding/active_slave")))
+		with _ ->
+			error "Failed to get active_slave of bond %s" master;
+			None
+
 	let known_props = ["mode"; "updelay"; "downdelay"; "miimon"; "use_carrier"]
 
 	let get_bond_properties master =
@@ -434,47 +510,13 @@ module Linux_bonding = struct
 					with _ ->
 						error "Failed to set property \"%s\" on bond %s" prop master
 				in
-				Ip.link_set_down master;
-				List.iter set_prop props_to_update;
-				Ip.link_set_up master
+				Ip.with_link_down master (fun () ->
+					with_slaves_removed master (fun () ->
+						List.iter set_prop props_to_update
+					)
+				)
 		end else
 			error "Bond %s does not exist; cannot set properties" master
-
-	let add_bond_slave master slave =
-		if is_bond_device master then
-			try
-				debug "Adding slave %s to bond %s" slave master;
-				Sysfs.write_one_line (Sysfs.getpath master "bonding/slaves") ("+" ^ slave)
-			with _ ->
-				error "Failed to add slave %s to bond %s" slave master
-		else
-			error "Bond %s does not exist; cannot add slave" master
-
-	let remove_bond_slave master slave =
-		if is_bond_device master then
-			try
-				debug "Remove slave %s from bond %s" slave master;
-				Sysfs.write_one_line (Sysfs.getpath master "bonding/slaves") ("-" ^ slave)
-			with _ ->
-				error "Failed to remove slave %s from bond %s" slave master
-		else
-			error "Bond %s does not exist; cannot remove slave" master
-
-	let get_bond_master_of slave =
-		try
-			let master_symlink = Sysfs.getpath slave "master" in
-			let master_path = Unix.readlink master_symlink in
-			let slaves_path = Filename.concat master_symlink "bonding/slaves" in
-			Unix.access slaves_path [ Unix.F_OK ];
-			Some (List.hd (List.rev (String.split '/' master_path)))
-		with _ -> None
-
-	let get_bond_active_slave master =
-		try
-			Some (Sysfs.read_one_line (Sysfs.getpath master ("bonding/active_slave")))
-		with _ ->
-			error "Failed to get active_slave of bond %s" master;
-			None
 end
 
 module Dhclient = struct
