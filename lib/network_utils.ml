@@ -14,6 +14,7 @@
 
 open Listext
 open Xstringext
+open Pervasiveext
 open Fun
 open Network_interface
 
@@ -208,19 +209,18 @@ info "Found at [ %s ]" (String.concat ", " (List.map string_of_int indices));
 		with e -> error "MTU size is not supported: %s" (string_of_int mtu)
 
 	let link_set_up dev =
-		ignore (link_set dev ["up"])
+		link_set dev ["up"]
 
 	let link_set_down dev =
 		if is_up dev then
-			ignore (link_set dev ["down"])
+			link_set dev ["down"]
 
-	let with_link_down dev f =
-		let up = is_up dev in
-		if up then
-			ignore (link_set dev ["down"]);
-		f ();
-		if up then
-			link_set_up dev
+	let with_links_down devs f =
+		let up_links = List.filter (fun dev -> is_up dev) devs in
+		List.iter (fun dev -> link_set dev ["down"]) up_links;
+		finally
+			f
+			(fun () -> List.iter link_set_up up_links)
 
 	let link ?(version=V46) dev attr =
 		let v = string_of_version version in
@@ -419,23 +419,19 @@ module Linux_bonding = struct
 			String.split ' ' slaves
 
 	let add_bond_slaves master slaves =
-		debug "Adding slaves %s to bond %s" (String.concat ", " slaves) master;
 		List.iter (fun slave ->
+			debug "Adding slave %s to bond %s" slave master;
 			try
-				Ip.with_link_down slave (fun () ->
-					Sysfs.write_one_line (Sysfs.getpath master "bonding/slaves") ("+" ^ slave)
-				)
+				Sysfs.write_one_line (Sysfs.getpath master "bonding/slaves") ("+" ^ slave)
 			with _ ->
 				error "Failed to add slave %s to bond %s" slave master
 		) slaves
 
 	let remove_bond_slaves master slaves =
-		debug "Removing slaves %s from bond %s" (String.concat ", " slaves) master;
 		List.iter (fun slave ->
+			debug "Removing slave %s from bond %s" slave master;
 			try
-				Ip.with_link_down slave (fun () ->
-					Sysfs.write_one_line (Sysfs.getpath master "bonding/slaves") ("-" ^ slave)
-				)
+				Sysfs.write_one_line (Sysfs.getpath master "bonding/slaves") ("-" ^ slave)
 			with _ ->
 				error "Failed to remove slave %s from bond %s" slave master
 		) slaves
@@ -445,8 +441,10 @@ module Linux_bonding = struct
 			let current_slaves = get_bond_slaves master in
 			let slaves_to_remove = List.set_difference current_slaves slaves in
 			let slaves_to_add = List.set_difference slaves current_slaves in
-			remove_bond_slaves master slaves_to_remove;
-			add_bond_slaves master slaves_to_add
+			Ip.with_links_down (slaves_to_add @ slaves_to_remove) (fun () ->
+				remove_bond_slaves master slaves_to_remove;
+				add_bond_slaves master slaves_to_add
+			)
 		else
 			error "Bond %s does not exist; cannot set slaves" master
 
@@ -454,9 +452,14 @@ module Linux_bonding = struct
 		if is_bond_device master then
 			try
 				let slaves = get_bond_slaves master in
-				remove_bond_slaves master slaves;
-				f ();
-				add_bond_slaves master slaves
+				if slaves <> [] then begin
+					Ip.with_links_down slaves (fun () ->
+						remove_bond_slaves master slaves;
+						finally
+							f
+							(fun () -> add_bond_slaves master slaves)
+					)
+				end
 			with _ ->
 				error "Failed to remove or re-add slaves from bond %s" master
 		else
@@ -510,7 +513,7 @@ module Linux_bonding = struct
 					with _ ->
 						error "Failed to set property \"%s\" on bond %s" prop master
 				in
-				Ip.with_link_down master (fun () ->
+				Ip.with_links_down [master] (fun () ->
 					with_slaves_removed master (fun () ->
 						List.iter set_prop props_to_update
 					)
