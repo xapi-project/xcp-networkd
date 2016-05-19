@@ -82,7 +82,9 @@ module Sysfs = struct
 			let result = input_line inchan in
 			close_in inchan;
 			result
-		with exn -> close_in inchan; raise (Read_error file)
+		with
+		| End_of_file -> close_in inchan; ""
+		| exn -> error "%s" (Printexc.to_string exn); close_in inchan; raise (Read_error file)
 
 	let write_one_line file l =
 		let outchan = open_out file in
