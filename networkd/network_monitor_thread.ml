@@ -25,15 +25,9 @@ open D
 (** Table for bonds status. *)
 let bonds_status : (string, (int * int)) Hashtbl.t = Hashtbl.create 10
 
-let monitor_blacklist = ref [
-	"dummy";
-	"xenbr";
-	"xapi";
-	"ovs-system";
-	"xenapi";
-	"lo";
-	"bond";
-	"pvs";
+let monitor_whitelist = ref [
+	"eth";
+	"vif"; (* This includes "tap" owing to the use of standardise_name below *)
 ]
 
 let xapi_rpc request =
@@ -113,10 +107,11 @@ let get_link_stats () =
 		List.map (fun link ->
 			(standardise_name (Link.get_name link)), link
 		) links |>
+		(* Only keep interfaces with prefixes on the whitelist, and exclude VLAN
+		   devices (ethx.y). *)
 		List.filter (fun (name,link) ->
-			let is_monitor_blacklisted = List.exists (fun s -> String.startswith s name) !monitor_blacklist ||
-						(String.startswith "eth" name && String.contains name '.') in
-			not is_monitor_blacklisted
+			List.exists (fun s -> String.startswith s name) !monitor_whitelist
+			&& not (String.startswith "eth" name && String.contains name '.')
 		) in
 
 	let devs = List.map (fun (name,link) ->
