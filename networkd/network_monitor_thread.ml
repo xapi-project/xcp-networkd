@@ -104,15 +104,21 @@ let get_link_stats () =
 	let cache = Link.cache_alloc s in
 	let links = Link.cache_to_list cache in
 	let links =
+		let is_whitelisted name =
+			List.exists (fun s -> String.startswith s name) !monitor_whitelist
+		in
+		let is_vlan name =
+			String.startswith "eth" name && String.contains name '.'
+		in
 		List.map (fun link ->
 			(standardise_name (Link.get_name link)), link
 		) links |>
 		(* Only keep interfaces with prefixes on the whitelist, and exclude VLAN
 		   devices (ethx.y). *)
-		List.filter (fun (name,link) ->
-			List.exists (fun s -> String.startswith s name) !monitor_whitelist
-			&& not (String.startswith "eth" name && String.contains name '.')
-		) in
+		List.filter (fun (name, _) ->
+			is_whitelisted name && not (is_vlan name)
+		)
+	in
 
 	let devs = List.map (fun (name,link) ->
 		let convert x = Int64.of_int (Unsigned.UInt64.to_int x) in
