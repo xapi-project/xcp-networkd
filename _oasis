@@ -13,8 +13,6 @@ Library networklibs
   Findlibname:        network-libs
   Modules:            Network_config, Network_utils
   BuildDepends:       forkexec, stdext, threads, rpclib, stdext, xcp-inventory, xcp.network
-  CSources:           link_stubs.c, netdev.h
-  CCOpt:              -Wno-unused-function -g -ggdb
 
 Executable xcp_networkd
   CompiledObject:     best
