@@ -18,6 +18,7 @@ let base_suite =
 	"base_suite" >:::
 		[
 			Network_test_lacp_properties.suite;
+			Network_test_igmp.suite;
 			Test_jsonrpc_client.suite;
 		]
 

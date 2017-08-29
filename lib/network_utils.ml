@@ -39,7 +39,15 @@ let inject_igmp_query_script = ref "/usr/libexec/xenopsd/igmp_query_injector.py"
 let mac_table_size = ref 10000
 let igmp_query_maxresp_time = ref "5000"
 
+let in_unit_test = ref false
+let unit_test_call_script = ref ""
+
 let call_script ?(log_successful_output=false) ?(timeout=Some 60.0) script args =
+	if !in_unit_test then begin
+		unit_test_call_script := (String.concat " " (script::args));
+		!unit_test_call_script
+	end
+	else
 	try
 		Unix.access script [ Unix.X_OK ];
 		(* Use the same $PATH as xapi *)
