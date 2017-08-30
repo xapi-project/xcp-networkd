@@ -19,6 +19,7 @@ let base_suite =
 		[
 			Network_test_lacp_properties.suite;
 			Test_jsonrpc_client.suite;
+			Network_test_ovs.suite;
 		]
 
 let _ = 
