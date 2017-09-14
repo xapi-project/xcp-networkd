@@ -41,14 +41,19 @@ let igmp_query_maxresp_time = ref "5000"
 let enable_ipv6_mcast_snooping = ref false
 let mcast_snooping_disable_flood_unregistered = ref true
 
-let call_script ?(log_successful_output=false) ?(timeout=Some 60.0) script args =
+let call_script ?(log_successful_output=false) ?(timeout=Some 60.0) ?(detach_child=false) script args =
 	try
 		Unix.access script [ Unix.X_OK ];
 		(* Use the same $PATH as xapi *)
 		let env = [| "PATH=" ^ (Sys.getenv "PATH") |] in
 		info "%s %s" script (String.concat " " args);
-		let (out,err) = Forkhelpers.execute_command_get_output ~env ?timeout script args in
-		out
+		if not(detach_child) then
+			let (out,err) = Forkhelpers.execute_command_get_output ~env ?timeout script args in
+			out
+		else
+			let pid = Forkhelpers.safe_close_and_exec ~env None None None [] script args in
+			Forkhelpers.dontwaitpid pid;
+			""
 	with
 	| Unix.Unix_error (e, a, b) ->
 		error "Caught unix error: %s [%s, %s]" (Unix.error_message e) a b;
@@ -880,7 +885,7 @@ module Ovs = struct
 
 	let inject_igmp_query ~name =
 		try
-			ignore (call_script ~log_successful_output:true !inject_igmp_query_script ["--detach"; "--max-resp-time"; !igmp_query_maxresp_time; "bridge"; name])
+			ignore (call_script ~log_successful_output:true ~detach_child:true !inject_igmp_query_script ["--max-resp-time"; !igmp_query_maxresp_time; "bridge"; name])
 		with _ -> ()    
 
 	let create_bridge ?mac ?external_id ?disable_in_band ?igmp_snooping ~fail_mode vlan vlan_bug_workaround name =
