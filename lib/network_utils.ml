@@ -35,6 +35,7 @@ let modprobe = "/sbin/modprobe"
 let ethtool = ref "/sbin/ethtool"
 let bonding_dir = "/proc/net/bonding/"
 let fcoedriver = ref "/opt/xensource/libexec/fcoe_driver"
+let sriov_plugin = ref "/opt/xensource/libexec/network_sriov"
 let inject_igmp_query_script = ref "/usr/libexec/xenopsd/igmp_query_injector.py"
 let mac_table_size = ref 10000
 let igmp_query_maxresp_time = ref "5000"
@@ -668,6 +669,19 @@ module Fcoe = struct
                 with _ ->
                         debug "Failed to get fcoe support status on device %s" name;
                         []
+end
+
+module SRIOV = struct
+    let call ?(log=false) args =
+        call_script ~log_successful_output:log ~timeout:(Some 10.0) !sriov_plugin args
+                
+    let get_capabilities name =
+        try
+            let output = call ["--capable"; name] in
+            if String.trim output = "1" then ["sriov"] else []
+        with _ ->
+            debug "Failed to get SRIOV support status on device %s" name;
+            []
 end
 
 module Sysctl = struct

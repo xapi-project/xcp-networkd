@@ -373,7 +373,10 @@ module Interface = struct
 
 	let get_capabilities _ dbg ~name =
 		Debug.with_thread_associated dbg (fun () ->
-			Fcoe.get_capabilities name
+			List.concat
+			[ Fcoe.get_capabilities name
+			; SRIOV.get_capabilities name
+			]
 		) ()
 
 	let is_connected _ dbg ~name =

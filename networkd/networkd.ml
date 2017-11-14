@@ -48,6 +48,12 @@ let resources = [
     path = Network_utils.fcoedriver;
     perms = [ Unix.X_OK ];
   };
+  { Xcp_service.name = "sriov-plugin";
+    description = "used to identify sriov interfaces";
+    essential = false;
+    path = Network_utils.sriov_plugin;
+    perms = [ Unix.X_OK ];
+  };
   { Xcp_service.name = "inject-igmp-query-script";
     description = "used to inject an IGMP query message for a bridge";
     essential = false;
