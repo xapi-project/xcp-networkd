@@ -370,7 +370,7 @@ module Interface = struct
 
 	let get_capabilities _ dbg ~name =
 		Debug.with_thread_associated dbg (fun () ->
-			Fcoe.get_capabilities name
+			Fcoe.get_capabilities name @ Network_utils.Sriov.get_capabilities name
 		) ()
 
 	let is_connected _ dbg ~name =
@@ -995,6 +995,29 @@ module Bridge = struct
 					) ports
 				)
 			) config
+		) ()
+end
+
+module Sriov = struct
+	open Xcp_pci
+
+	let enable _ dbg ~name =
+		Debug.with_thread_associated dbg (fun () ->
+			debug "Enable NET-SRIOV by name: %s" name;
+			Network_utils.Sriov.enable_internal name
+		) ()
+
+	let disable _ dbg ~name =
+		Debug.with_thread_associated dbg (fun () ->	
+			debug "Disable NET-SRIOV by name: %s" name;
+			Network_utils.Sriov.disable_internal name
+		) ()
+
+	let make_vf_config _ dbg ~pci_address ~vf_info =
+		Debug.with_thread_associated dbg (fun () ->	
+			let pcibuspath = string_of_address pci_address in
+			debug "Config VF with pci address: %s" pcibuspath;
+			Network_utils.Sriov.make_vf_conf_internal pcibuspath vf_info
 		) ()
 end
 
