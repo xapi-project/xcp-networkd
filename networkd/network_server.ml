@@ -998,6 +998,28 @@ module Bridge = struct
 		) ()
 end
 
+module Sriov = struct
+	open Xcp_pci
+
+	let enable _ dbg ~name =
+		Debug.with_thread_associated dbg (fun () ->
+			debug "Enable NET-SRIOV by name: %s" name;
+			Ok Modprobe_successful
+		) ()
+
+	let disable _ dbg ~name =
+		Debug.with_thread_associated dbg (fun () ->	
+			debug "Disable NET-SRIOV by name: %s" name;
+			Ok Modprobe_successful
+		) ()
+
+	let make_vf_config _ dbg ~pci_address ~vf_info =
+		Debug.with_thread_associated dbg (fun () ->	
+			let pcibuspath = string_of_address pci_address in
+			debug "Config VF with pci address: %s" pcibuspath;
+		) ()
+end
+
 module PVS_proxy = struct
 	open PVS_proxy
 
