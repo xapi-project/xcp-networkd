@@ -143,6 +143,10 @@ module Interface = struct
 			| Some master -> Proc.get_bond_slave_mac master name
 			| None -> Ip.get_mac name
 		) ()
+	let get_pci_bus_path _ dbg ~name =
+		Debug.with_thread_associated dbg (fun () ->
+			Sysfs.get_pcibuspath name
+		) ()
 
 	let is_up _ dbg ~name =
 		Debug.with_thread_associated dbg (fun () ->
