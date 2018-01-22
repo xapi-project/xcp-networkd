@@ -1328,6 +1328,10 @@ module Sriov = struct
 			gen_options_for_maxvfs driver max_vfs >>= fun options ->
 			Result.Ok (parse_modprobe_conf_internal file_path driver options)
 		with _ -> Result.Error (Other, "Failed to parse modprobe conf for SRIOV configuration for " ^ driver)
+
+	let get_capabilities dev = 
+		if Sysfs.get_sriov_maxvfs dev = 0 then [] else ["sriov"]
+
 	let enable_internal dev =
 		let open Rresult.R.Infix in
 		let numvfs = Sysfs.get_sriov_numvfs dev
