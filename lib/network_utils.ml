@@ -13,11 +13,19 @@
  *)
 
 open Xapi_stdext_pervasives
-
+open Xapi_stdext_unix
+open Xapi_stdext_std
 open Network_interface
 
 module D = Debug.Make(struct let name = "network_utils" end)
 open D
+
+type util_error =
+| Bus_out_of_range
+| Not_enough_mmio_resources
+| Fail_to_set_vf_rate
+| No_sriov_capability 
+| Other
 
 let iproute2 = "/sbin/ip"
 let resolv_conf = "/etc/resolv.conf"
@@ -164,6 +172,11 @@ module Sysfs = struct
 			debug "%s: could not read netdev's driver name" dev;
 			None
 
+	let get_driver_name_err dev =
+		match get_driver_name dev with
+		| Some a -> Result.Ok a
+		| None -> Result.Error (Other, "Failed to get driver name for: "^ dev)
+
 	(** Returns the features bitmap for the driver for [dev].
 	 *  The features bitmap is a set of NETIF_F_ flags supported by its driver. *)
 	let get_features dev =
@@ -208,6 +221,72 @@ module Sysfs = struct
 		|> (fun p -> try read_one_line p |> duplex_of_string with _ -> Duplex_unknown)
 		in (speed, duplex)
 
+	let get_dev_nums_with_same_driver driver = 
+		try
+			Sys.readdir ("/sys/bus/pci/drivers/" ^ driver)
+			|> Array.to_list
+			|> List.filter (Re.execp (Re_perl.compile_pat "\d+:\d+:\d+\.\d+"))
+			|> List.length
+		with _ -> 0
+
+	let parent_device_of_vf pcibuspath =
+		try
+			let pf_net_path = Printf.sprintf "/sys/bus/pci/devices/%s/physfn/net" pcibuspath in
+			let devices = Sys.readdir pf_net_path in
+			Result.Ok devices.(0)
+		with _ -> Result.Error (Other, "Can not get parent device for " ^ pcibuspath)
+
+	let device_index_of_vf parent_device pcibuspath =
+		try
+			let re = Re_perl.compile_pat "virtfn(\d+)" in
+			let device_path = getpath parent_device "device" in
+			let group = Sys.readdir device_path
+				|> Array.to_list
+				|> List.filter (Re.execp re) (* List elements are like "virtfn1" *)
+				|> List.find (fun x -> Xstringext.String.has_substr (Unix.readlink (device_path ^ "/" ^ x)) pcibuspath )
+				|> Re.exec_opt re
+			in
+			match group with
+			| None -> Result.Error (Other, "Can not get device index for " ^ pcibuspath)
+			| Some x -> Ok (int_of_string (Re.Group.get x 1))
+		with _ -> Result.Error (Other, "Can not get device index for " ^ pcibuspath)
+
+	let get_sriov_numvfs dev =
+		try
+			getpath dev "device/sriov_numvfs"
+			|> read_one_line  
+			|> String.trim
+			|> int_of_string
+		with _ -> 0
+
+	let get_sriov_maxvfs dev =
+		try
+			getpath dev "device/sriov_totalvfs"
+			|> read_one_line  
+			|> String.trim
+			|> int_of_string
+			|> fun n -> n - 1 (* maxvfs is totalvfs -1, as totalvfs is PF num + VF num *)
+		with _ -> 0
+
+	let set_sriov_numvfs dev num_vfs =
+		let interface = getpath dev "device/sriov_numvfs" in
+		let oc = open_out interface in
+		try
+			Pervasiveext.finally (fun () ->
+				output_string oc (string_of_int num_vfs))
+				(fun () -> close_out oc);
+			if get_sriov_numvfs dev = num_vfs then Result.Ok  ()
+			else begin
+				Result.Error (Other, "Error: set SRIOV error on " ^ dev)
+			end
+		with
+		| Sys_error s when Xstringext.String.has_substr s "out of range of" -> 
+			Result.Error (Bus_out_of_range, "Error: bus out of range when setting SRIOV numvfs on " ^ dev)
+		| Sys_error s when Xstringext.String.has_substr s "not enough MMIO resources" -> 
+			Result.Error (Not_enough_mmio_resources, "Error: not enough mmio resources when setting SRIOV numvfs on " ^ dev)
+		| e ->
+			let msg = Printf.sprintf "Error: set SRIOV numvfs error with exception %s on %s" (Printexc.to_string e) dev in
+			Result.Error (Other, msg)
 end
 
 module Ip = struct
