@@ -1328,6 +1328,9 @@ module Sriov = struct
 			Result.Ok (parse_modprobe_conf_internal file_path driver options)
 		with _ -> Result.Error (Other, "Failed to parse modprobe conf for SRIOV configuration for " ^ driver)
 
+	let get_capabilities dev = 
+		if Sysfs.get_sriov_maxvfs dev = 0 then [] else ["sriov"]
+
 	let enable_sriov_via_modprobe driver maxvfs has_probe_conf need_rebuild_initrd conf = 
 		let open Rresult.R.Infix in
 		match has_probe_conf, need_rebuild_initrd with
