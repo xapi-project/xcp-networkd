@@ -477,6 +477,22 @@ info "Found at [ %s ]" (String.concat ", " (List.map string_of_int indices));
 	let destroy_vlan name =
 		if List.mem name (Sysfs.list ()) then
 			ignore (call ~log:true ["link"; "delete"; name])
+
+	let set_vf_mac dev index mac =
+		try
+			Result.Ok (link_set dev ["vf"; string_of_int index; "mac"; mac])
+		with _ -> Result.Error (Other, "Failed to set vf mac for: " ^ dev)
+
+	let set_vf_vlan dev index vlan =
+		try
+			Result.Ok (link_set dev ["vf"; string_of_int index; "vlan"; string_of_int vlan])
+		with _ -> Result.Error (Other, "Failed to set vf vlan for: " ^ dev)
+
+	(* We know some NICs do not support config VF Rate, so will explicitly tell XAPI this error*)
+	let set_vf_rate dev index rate =
+		try
+			Result.Ok (link_set dev ["vf"; string_of_int index; "mac"; string_of_int rate])
+		with _ -> Result.Error (Fail_to_set_vf_rate, "Failed to set vf rate for: " ^ dev)
 end
 
 module Linux_bonding = struct
@@ -1388,3 +1404,17 @@ module Sriov = struct
 			Modprobe.write_conf_file driver conf >>= fun () ->
 			Dracut.rebuild_initrd ()
 		| _ -> Ok ()
+
+	let make_vf_conf_internal pcibuspath mac vlan rate =
+		let exe_except_none f = function
+			| None -> Result.Ok ()
+			| Some a -> f a
+		in
+		let open Rresult.R.Infix in
+		Sysfs.parent_device_of_vf pcibuspath >>= fun dev ->
+		Sysfs.device_index_of_vf dev pcibuspath >>= fun index ->
+		exe_except_none (Ip.set_vf_mac dev index) mac >>= fun () ->
+		exe_except_none (Ip.set_vf_vlan dev index) vlan >>= fun () ->
+		exe_except_none (Ip.set_vf_rate dev index) rate >>= fun () ->
+		Result.Ok ()
+end
