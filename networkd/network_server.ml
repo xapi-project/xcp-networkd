@@ -1003,12 +1003,13 @@ module Bridge = struct
 end
 
 module Sriov = struct
-	open Xcp_pci
 
 	let enable _ dbg ~name =
 		Debug.with_thread_associated dbg (fun () ->
 			debug "Enable NET-SRIOV by name: %s" name;
-			Ok Modprobe_successful
+			match Network_utils.Sriov.enable_internal name with
+			| Ok t -> (Ok t:enable_result)
+			| Result.Error (_, msg) -> Error msg
 		) ()
 
 	let disable _ dbg ~name =
