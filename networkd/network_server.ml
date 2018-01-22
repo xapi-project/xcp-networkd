@@ -1015,7 +1015,9 @@ module Sriov = struct
 	let disable _ dbg ~name =
 		Debug.with_thread_associated dbg (fun () ->	
 			debug "Disable NET-SRIOV by name: %s" name;
-			Ok Modprobe_successful
+			match Network_utils.Sriov.disable_internal name with
+			| Ok () -> (Ok:disable_result)
+			| Result.Error (_, msg) -> Error msg
 		) ()
 
 	let make_vf_config _ dbg ~pci_address ~vf_info =

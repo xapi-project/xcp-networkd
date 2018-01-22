@@ -1374,3 +1374,17 @@ module Sriov = struct
 				enable_sriov_via_modprobe () >>= fun () ->
 				Ok Modprobe_successful
 		end
+
+	let disable_internal dev =
+		let open Rresult.R.Infix in
+		Sysfs.get_driver_name_err dev >>= 
+		fun driver ->
+		parse_modprobe_conf driver 0 >>= 
+		fun (has_probe_conf, need_rebuild_intrd, conf) ->
+		match has_probe_conf,need_rebuild_intrd with
+		| false, false ->
+			Sysfs.set_sriov_numvfs dev 0
+		| true, true ->
+			Modprobe.write_conf_file driver conf >>= fun () ->
+			Dracut.rebuild_initrd ()
+		| _ -> Ok ()
