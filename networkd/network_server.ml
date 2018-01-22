@@ -14,6 +14,7 @@
 
 open Network_utils
 open Network_interface
+open Xapi_stdext_monadic
 
 module D = Debug.Make(struct let name = "network_server" end)
 open D
@@ -1020,10 +1021,18 @@ module Sriov = struct
 			| Result.Error (_, msg) -> Error msg
 		) ()
 
-	let make_vf_config _ dbg ~pci_address ~vf_info =
+	let make_vf_config _ dbg ~pci_address ~(vf_info : Sriov.sriov_pci_t)=
 		Debug.with_thread_associated dbg (fun () ->	
-			let pcibuspath = string_of_address pci_address in
+			let vlan = Opt.map Int64.to_int vf_info.vlan
+			and rate = Opt.map Int64.to_int vf_info.rate
+			and pcibuspath = Xcp_pci.string_of_address pci_address in
 			debug "Config VF with pci address: %s" pcibuspath;
+			match Network_utils.Sriov.make_vf_conf_internal pcibuspath vf_info.mac vlan rate with
+			| Result.Ok () -> (Ok:config_result)
+			| Result.Error (Fail_to_set_vf_rate, msg) -> 
+				debug "%s" msg;
+				Error Config_vf_rate_not_supported
+			| Result.Error (_, msg) -> debug "%s" msg; Error (Unknown msg)
 		) ()
 end
 
