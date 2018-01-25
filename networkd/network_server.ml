@@ -14,6 +14,8 @@
 
 open Network_utils
 open Network_interface
+open Xapi_stdext_std
+open Xapi_stdext_unix
 open Xapi_stdext_monadic
 
 module D = Debug.Make(struct let name = "network_server" end)
@@ -120,6 +122,167 @@ let need_enic_workaround () =
 		match Sysfs.get_driver_version "enic" () with
 		| Some vs -> (is_older_version vs !enic_workaround_until_version ())
 		| None -> false )
+
+module Sriov = struct
+
+	let gen_options_for_maxvfs driver max_vfs =
+		match Sysfs.get_dev_nums_with_same_driver driver with
+		| num when num > 0 -> Result.Ok (
+			Array.make num (string_of_int max_vfs)
+			|> Array.to_list
+			|> String.concat ",")
+		| _ -> Result.Error (Other, "Fail to generate options for maxvfs for " ^ driver)
+
+	(* For given driver like igb, we parse each line of igb.conf which is the modprobe
+	configuration for igb. We keep the same the lines that do not have SRIOV configurations and 
+	change lines that need to be changed with patterns like `options igb max_vfs=4`
+	*)
+	let parse_modprobe_conf_internal file_path driver option =
+		(* Initially I did not use ref here, but afterward changed to ref to make the code easy to read *)
+		let has_probe_conf = ref false in
+		let need_rebuild_initrd = ref false in
+		let parse_single_line s = 
+			let parse_driver_options s = 
+				match Xstringext.String.split ~limit:2 '=' s with
+				(* has SRIOV configuration but the max_vfs is exactly what we want to set, so no changes and return s *)
+				| [k; v] when k = "max_vfs" && v = option ->  has_probe_conf := true; s
+				(* has SRIOV configuration and we need change it to expected option *)
+				| [k; v] when k = "max_vfs"  -> 
+					has_probe_conf := true;
+					need_rebuild_initrd := true;
+					debug "change SRIOV options from [%s=%s] to [%s=%s]" k v k option;
+					Printf.sprintf "max_vfs=%s" option
+				(* we do not care the lines without SRIOV configurations *)
+				| _ -> s
+			in
+			let trimed_s = String.trim s in
+			if Re.execp (Re_perl.compile_pat ("options[ \t]+" ^ driver)) trimed_s then
+				let driver_options = Re.split (Re_perl.compile_pat "[ \t]+") trimed_s in
+				List.map parse_driver_options driver_options
+				|> String.concat " "
+			else
+				trimed_s
+		in
+		let lines = try Unixext.read_lines file_path with _ -> [] in
+		let new_conf = List.map parse_single_line lines in
+		!has_probe_conf, !need_rebuild_initrd, new_conf
+
+	(*
+	returns ( a * b * c) where
+	a indicates the probe configuration already has the max_vfs options, meaning the device doesn't support sysfs and will be configed by modprobe
+	b indicates some changes shall be made on the coniguration to enable sriov to max_vfs, so we shall rebuild the initrd.
+	and c is the configurations after these changes
+	*)
+	let parse_modprobe_conf driver max_vfs =
+		try
+			let open Rresult.R.Infix in
+			let file_path = Printf.sprintf "/etc/modprobe.d/%s.conf" driver in
+			gen_options_for_maxvfs driver max_vfs >>= fun options ->
+			Result.Ok (parse_modprobe_conf_internal file_path driver options)
+		with _ -> Result.Error (Other, "Failed to parse modprobe conf for SRIOV configuration for " ^ driver)
+
+	let get_capabilities dev = 
+		if Sysfs.get_sriov_maxvfs dev = 0 then [] else ["sriov"]
+
+	let enable_sriov_via_modprobe driver maxvfs has_probe_conf need_rebuild_initrd conf = 
+		let open Rresult.R.Infix in
+		match has_probe_conf, need_rebuild_initrd with
+		| true, true ->
+			Modprobe.write_conf_file driver conf >>= fun () ->
+			Dracut.rebuild_initrd ()
+		| false, false -> 
+			gen_options_for_maxvfs driver maxvfs >>= fun options ->
+			let new_option_line = Printf.sprintf "options %s max_vfs=%s" driver options in
+			Modprobe.write_conf_file driver (conf @ [new_option_line]) >>= fun () ->
+			Dracut.rebuild_initrd ()
+		| true, false -> Result.Ok () (* already have modprobe configuration and no need to change *)
+		| false, true -> Result.Error (Other, "enabling SRIOV via modprobe never comes here for: " ^ driver)
+
+	let enable_internal dev =
+		let open Rresult.R.Infix in
+		let numvfs = Sysfs.get_sriov_numvfs dev
+		and maxvfs = Sysfs.get_sriov_maxvfs dev in
+		Sysfs.get_driver_name_err dev >>= fun driver ->
+		parse_modprobe_conf driver maxvfs >>= fun (has_probe_conf, need_rebuild_initrd, conf) ->
+		if maxvfs = 0 then Result.Error (No_sriov_capability, (Printf.sprintf "%s: do not have SRIOV capabilities" dev)) else Ok () >>= fun () ->
+		if numvfs = 0 then begin
+			debug "enable SR-IOV on a device: %s that is disabled" dev;
+			match Sysfs.set_sriov_numvfs dev maxvfs with
+			| Result.Ok _ -> Ok Sysfs_successful
+			| Result.Error (Bus_out_of_range, msg) as e ->
+				debug "%s" msg; e
+			| Result.Error (Not_enough_mmio_resources, msg) as e ->
+				debug "%s" msg; e
+			| Result.Error (_, msg) ->
+				debug "%s does not support sysfs interfaces for reason %s, trying modprobe" dev msg;
+				enable_sriov_via_modprobe driver maxvfs has_probe_conf need_rebuild_initrd conf >>= fun () ->
+				Ok Modprobe_successful_requires_reboot
+		end
+		else begin
+			debug "enable SR-IOV on a device: %s that has been already enabled" dev;
+			match has_probe_conf with
+			| false -> Ok Sysfs_successful
+			| true -> 
+				enable_sriov_via_modprobe driver maxvfs has_probe_conf need_rebuild_initrd conf >>= fun () ->
+				Ok Modprobe_successful
+		end
+
+	let enable _ dbg ~name =
+		Debug.with_thread_associated dbg (fun () ->
+			debug "Enable NET-SRIOV by name: %s" name;
+			match enable_internal name with
+			| Ok t -> (Ok t:enable_result)
+			| Result.Error (_, msg) -> Error msg
+		) ()
+
+	let disable_internal dev =
+		let open Rresult.R.Infix in
+		Sysfs.get_driver_name_err dev >>= 
+		fun driver ->
+		parse_modprobe_conf driver 0 >>= 
+		fun (has_probe_conf, need_rebuild_intrd, conf) ->
+		match has_probe_conf,need_rebuild_intrd with
+		| false, false ->
+			Sysfs.set_sriov_numvfs dev 0
+		| true, true ->
+			Modprobe.write_conf_file driver conf >>= fun () ->
+			Dracut.rebuild_initrd ()
+		| _ -> Ok ()
+
+	let disable _ dbg ~name =
+		Debug.with_thread_associated dbg (fun () ->	
+			debug "Disable NET-SRIOV by name: %s" name;
+			match disable_internal name with
+			| Ok () -> (Ok:disable_result)
+			| Result.Error (_, msg) -> Error msg
+		) ()
+
+	let make_vf_conf_internal pcibuspath mac vlan rate =
+		let exe_except_none f = function
+			| None -> Result.Ok ()
+			| Some a -> f a
+		in
+		let open Rresult.R.Infix in
+		Sysfs.parent_device_of_vf pcibuspath >>= fun dev ->
+		Sysfs.device_index_of_vf dev pcibuspath >>= fun index ->
+		exe_except_none (Ip.set_vf_mac dev index) mac >>= fun () ->
+		exe_except_none (Ip.set_vf_vlan dev index) vlan >>= fun () ->
+		exe_except_none (Ip.set_vf_rate dev index) rate
+
+	let make_vf_config _ dbg ~pci_address ~(vf_info : Sriov.sriov_pci_t)=
+		Debug.with_thread_associated dbg (fun () ->	
+			let vlan = Opt.map Int64.to_int vf_info.vlan
+			and rate = Opt.map Int64.to_int vf_info.rate
+			and pcibuspath = Xcp_pci.string_of_address pci_address in
+			debug "Config VF with pci address: %s" pcibuspath;
+			match make_vf_conf_internal pcibuspath vf_info.mac vlan rate with
+			| Result.Ok () -> (Ok:config_result)
+			| Result.Error (Fail_to_set_vf_rate, msg) -> 
+				debug "%s" msg;
+				Error Config_vf_rate_not_supported
+			| Result.Error (_, msg) -> debug "%s" msg; Error (Unknown msg)
+		) ()
+end
 
 module Interface = struct
 	let get_config name =
@@ -375,7 +538,7 @@ module Interface = struct
 
 	let get_capabilities _ dbg ~name =
 		Debug.with_thread_associated dbg (fun () ->
-			Fcoe.get_capabilities name @ Network_utils.Sriov.get_capabilities name
+			Fcoe.get_capabilities name @ Sriov.get_capabilities name
 		) ()
 
 	let is_connected _ dbg ~name =
@@ -1000,39 +1163,6 @@ module Bridge = struct
 					) ports
 				)
 			) config
-		) ()
-end
-
-module Sriov = struct
-
-	let enable _ dbg ~name =
-		Debug.with_thread_associated dbg (fun () ->
-			debug "Enable NET-SRIOV by name: %s" name;
-			match Network_utils.Sriov.enable_internal name with
-			| Ok t -> (Ok t:enable_result)
-			| Result.Error (_, msg) -> Error msg
-		) ()
-
-	let disable _ dbg ~name =
-		Debug.with_thread_associated dbg (fun () ->	
-			debug "Disable NET-SRIOV by name: %s" name;
-			match Network_utils.Sriov.disable_internal name with
-			| Ok () -> (Ok:disable_result)
-			| Result.Error (_, msg) -> Error msg
-		) ()
-
-	let make_vf_config _ dbg ~pci_address ~(vf_info : Sriov.sriov_pci_t)=
-		Debug.with_thread_associated dbg (fun () ->	
-			let vlan = Opt.map Int64.to_int vf_info.vlan
-			and rate = Opt.map Int64.to_int vf_info.rate
-			and pcibuspath = Xcp_pci.string_of_address pci_address in
-			debug "Config VF with pci address: %s" pcibuspath;
-			match Network_utils.Sriov.make_vf_conf_internal pcibuspath vf_info.mac vlan rate with
-			| Result.Ok () -> (Ok:config_result)
-			| Result.Error (Fail_to_set_vf_rate, msg) -> 
-				debug "%s" msg;
-				Error Config_vf_rate_not_supported
-			| Result.Error (_, msg) -> debug "%s" msg; Error (Unknown msg)
 		) ()
 end
 
