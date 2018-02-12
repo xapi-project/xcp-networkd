@@ -32,6 +32,8 @@ type util_error =
 | Fail_to_write_modprobe_cfg
 | Fail_to_get_driver_name
 | No_sriov_capability
+| Vf_sysfs_path_not_found
+| Fail_to_unbind_from_pciback
 | Other
 
 let iproute2 = "/sbin/ip"
@@ -49,6 +51,8 @@ let bonding_dir = "/proc/net/bonding/"
 let uname = ref "/usr/bin/uname"
 let dracut = ref "/sbin/dracut"
 let dracut_timeout = ref 120.0
+let pciback_unbind_interface =  ref "/sys/bus/pci/drivers/pciback/unbind"
+let pciback_remove_slot_interface =  ref "/sys/bus/pci/drivers/pciback/remove_slot"
 let fcoedriver = ref "/opt/xensource/libexec/fcoe_driver"
 let inject_igmp_query_script = ref "/usr/libexec/xenopsd/igmp_query_injector.py"
 let mac_table_size = ref 10000
@@ -246,20 +250,60 @@ module Sysfs = struct
 			Result.Ok devices.(0)
 		with _ -> Result.Error (Parent_device_of_vf_not_found, "Can not get parent device for " ^ pcibuspath)
 
-	let device_index_of_vf parent_device pcibuspath =
+	let get_child_vfs_sysfs_paths dev = 
 		try
-			let re = Re_perl.compile_pat "virtfn(\d+)" in
-			let device_path = getpath parent_device "device" in
-			let group = Sys.readdir device_path
+			let device_path = getpath dev "device" in
+			Result. Ok (
+				Sys.readdir device_path
 				|> Array.to_list
-				|> List.filter (Re.execp re) (* List elements are like "virtfn1" *)
-				|> List.find (fun x -> Xstringext.String.has_substr (Unix.readlink (device_path ^ "/" ^ x)) pcibuspath )
-				|> Re.exec_opt re
+				|> List.filter (Re.execp (Re_perl.compile_pat "virtfn(\d+)")) (* List elements are like "virtfn1" *)
+				|> List.map (Filename.concat device_path)
+			)
+		with _ -> Result.Error (Vf_sysfs_path_not_found, "Can not get child vfs sysfs paths for " ^ dev)
+
+	let device_index_of_vf parent_dev pcibuspath =
+		try
+			let open Rresult.R.Infix in
+			get_child_vfs_sysfs_paths parent_dev >>= fun paths ->
+			let group = 
+				List.find (fun x -> Xstringext.String.has_substr (Unix.readlink x) pcibuspath) paths
+				|> Re.exec_opt (Re_perl.compile_pat "virtfn(\d+)")
 			in
 			match group with
 			| None -> Result.Error (Vf_index_not_found, "Can not get device index for " ^ pcibuspath)
 			| Some x -> Ok (int_of_string (Re.Group.get x 1))
 		with _ -> Result.Error (Vf_index_not_found, "Can not get device index for " ^ pcibuspath)
+
+	let unbind_child_vfs dev =
+		let unbind vf_path =
+			let driver_name = 
+				try
+					Unix.readlink (Filename.concat vf_path "driver")
+					|> Filename.basename
+				with _ -> "" 
+			and vf_pcibuspath =
+				Unix.readlink vf_path
+				|> Filename.basename
+			in
+			match driver_name with
+			(* only unbind VFs from pciback driver *)
+			| "pciback" ->
+				begin
+					debug "unbinding %s from pciback at %s" vf_path vf_pcibuspath; 
+					try 
+						write_one_line !pciback_unbind_interface vf_pcibuspath;
+						write_one_line !pciback_remove_slot_interface vf_pcibuspath;
+						Result.Ok ()
+					with _ -> Result.Error (Fail_to_unbind_from_pciback, "VF Fail to be unbinded from pciback: " ^ vf_path)
+				end
+			(* not bind to any driver, Ok *)
+			| "" -> Result.Ok ()
+			(* VFs can only be used for passthrough *)
+			| other -> Result.Error (Other, Printf.sprintf "VF %s is binded to a unexpected driver: %s, other than pciback for " vf_path other)
+		in
+		let open Rresult.R.Infix in
+		get_child_vfs_sysfs_paths dev >>= fun paths ->
+		List.fold_left (>>=) (Ok ()) (List.map (fun x -> fun _ -> unbind x) paths)
 
 	let get_sriov_numvfs dev =
 		try
