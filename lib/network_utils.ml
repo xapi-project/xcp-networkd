@@ -31,6 +31,7 @@ type util_error =
 | Fail_to_rebuild_initrd
 | Fail_to_write_modprobe_cfg
 | Fail_to_get_driver_name
+| Fail_to_get_maxvfs
 | No_sriov_capability
 | Vf_sysfs_path_not_found
 | Fail_to_unbind_from_driver
@@ -50,6 +51,7 @@ let ethtool = ref "/sbin/ethtool"
 let bonding_dir = "/proc/net/bonding/"
 let uname = ref "/usr/bin/uname"
 let dracut = ref "/sbin/dracut"
+let modinfo = ref "/sbin/modinfo"
 let dracut_timeout = ref 120.0
 let fcoedriver = ref "/opt/xensource/libexec/fcoe_driver"
 let inject_igmp_query_script = ref "/usr/libexec/xenopsd/igmp_query_injector.py"
@@ -95,6 +97,13 @@ let fork_script script args =
 		Forkhelpers.dontwaitpid pid;
 	in
 	check_n_run fork_script_internal script args
+
+	let rec find_map f = function
+	| [] -> None
+	| a :: t -> 
+		match f a with
+		| None -> find_map f t
+		| Some v -> Some v
 
 module Sysfs = struct
 	let list () =
@@ -1318,10 +1327,136 @@ module Dracut = struct
 		with _ -> Result.Error (Fail_to_rebuild_initrd, "Error occurs in building initrd")
 end
 
+module Modinfo = struct
+	let call ?(log=false) args =
+		call_script ~log_successful_output:log !modinfo args
+
+	let is_param_array driver param_name =
+		let out = call ["--parameter"; driver]
+			|> String.trim |> String.split_on_char '\n'
+		in
+		let re = Re_perl.compile_pat "\((.*)\)$" in
+		let has_array_of str =
+			match Re.exec_opt re str with
+			| None -> false
+			| Some x -> Re.Group.get x 1 |> Astring.String.is_infix ~affix:"array of"
+		in
+		List.exists (fun line ->
+				match Astring.String.cut ~sep:":" line with
+				| None -> false
+				| Some (param, description)  -> String.trim param = param_name && has_array_of description
+			) out
+end
+
 module Modprobe = struct
-	let write_conf_file driver content=
+	let getpath driver =
+		Printf.sprintf "/etc/modprobe.d/%s.conf" driver
+
+	let write_conf_file driver content =
 		try
-			Unixext.write_string_to_file (Printf.sprintf "/etc/modprobe.d/%s.conf" driver) (String.concat "\n" content);
+			Unixext.write_string_to_file (getpath driver) (String.concat "\n" content);
 			Result.Ok ()
 		with _ -> Result.Error (Fail_to_write_modprobe_cfg, "Failed to write modprobe configuration file for: " ^ driver)
+
+	(*
+	The module config file is like:
+	# VFs-param: max_vfs
+	# VFs-maxvfs-by-default: 7
+	# VFs-maxvfs-by-user: X
+	options igb max_vfs = 7,7
+
+	This function's process: "igb" -> "VFs-param" -> "max_vfs"
+	*)
+	let get_config_from_comments driver key =
+		let lines = try Unixext.read_lines (getpath driver) with _ -> [] in
+		try
+			find_map (fun x -> begin
+					let line = String.trim x in
+					if Astring.String.is_prefix ~affix:("# " ^ key) line then 
+						let value =
+							String.split_on_char ':' line
+							|> fun x -> List.nth x 1
+							|> String.trim
+						in
+						if value = "" then None else Some value
+					else None
+				end) lines
+		with _ -> None
+
+	(* this function not returning None means that the driver doesn't suppport sysfs *)
+	let get_vf_param driver = get_config_from_comments driver "VFs-param"
+
+	let get_default_maxvfs driver = 
+		try
+			match get_config_from_comments driver "VFs-maxvfs-by-default" with
+			| None -> None
+			| Some v -> Some (int_of_string v)
+		with _ -> None
+
+	let get_user_defined_maxvfs driver = 
+		try
+			match get_config_from_comments driver "VFs-maxvfs-by-user" with
+			| None -> None
+			| Some v -> Some (int_of_string v)
+		with _ -> None
+
+	let get_maxvfs driver =
+		match get_default_maxvfs driver, get_user_defined_maxvfs driver with
+		| Some a, None -> Result.Ok a
+		| Some a, Some b -> Result.Ok (min a b)
+		| _ -> Result.Error (Fail_to_get_maxvfs, "Fail to get maxvfs for "^ driver)
+
+	let config_sriov driver vf_param maxvfs =
+		let open Rresult.R.Infix in
+		(* To enable SR-IOV via modprobe configuration, we add a line like `options igb max_vfs=7,7,7`
+		into the configuration. This function is meant to generate the options like `7,7,7`. the `7` have to
+		be repeated as many times as the number of devices with the same driver.
+		*)
+		let repeat = 
+			if Modinfo.is_param_array driver vf_param then 1
+			else Sysfs.get_dev_nums_with_same_driver driver
+		in
+		begin
+			if repeat > 0 then Result.Ok (
+				Array.make repeat (string_of_int maxvfs)
+				|> Array.to_list
+				|> String.concat ",")
+			else Result.Error (Other, "Fail to generate options for maxvfs for " ^ driver)
+		end >>= fun option ->
+		let need_rebuild_initrd = ref false in
+		let has_probe_conf = ref false in
+		let parse_single_line s = 
+			let parse_driver_options s = 
+				match Astring.String.cut ~sep:"=" s  with
+				(* has SR-IOV configuration but the max_vfs is exactly what we want to set, so no changes and return s *)
+				| Some (k, v) when k = vf_param && v = option -> has_probe_conf := true; s
+				(* has SR-IOV configuration and we need change it to expected option *)
+				| Some (k, v) when k = vf_param ->
+					has_probe_conf := true;
+					need_rebuild_initrd := true;
+					debug "change SR-IOV options from [%s=%s] to [%s=%s]" k v k option;
+					Printf.sprintf "%s=%s" vf_param option
+				(* we do not care the lines without SR-IOV configurations *)
+				| _ -> s
+			in
+			let trimed_s = String.trim s in
+			if Re.execp (Re_perl.compile_pat ("options[ \t]+" ^ driver)) trimed_s then
+				let driver_options = Re.split (Re_perl.compile_pat "[ \t]+") trimed_s in
+				List.map parse_driver_options driver_options
+				|> String.concat " "
+			else
+				trimed_s
+		in
+		let lines = try Unixext.read_lines (getpath driver) with _ -> [] in
+		let new_conf = List.map parse_single_line lines in
+		match !has_probe_conf, !need_rebuild_initrd with
+		| true, true ->
+			write_conf_file driver new_conf >>= fun () ->
+			Dracut.rebuild_initrd ()
+		| false, false -> 
+			let new_option_line = Printf.sprintf "options %s %s=%s" driver vf_param option in
+			write_conf_file driver (new_conf @ [new_option_line]) >>= fun () ->
+			Dracut.rebuild_initrd ()
+		| true, false -> Result.Ok () (* already have modprobe configuration and no need to change *)
+		| false, true -> Result.Error (Other, "enabling SR-IOV via modprobe never comes here for: " ^ driver)
 end
