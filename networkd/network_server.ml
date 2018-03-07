@@ -24,6 +24,7 @@ let network_conf = ref "/etc/xcp/network.conf"
 let config : config_t ref = ref Network_config.empty_config
 let backend_kind = ref Openvswitch
 let enic_workaround_until_version = ref "2.3.0.30"
+let pvsproxy_rpc_timeout = ref 300.0
 
 let legacy_management_interface_start () =
 	try
@@ -1012,13 +1013,31 @@ module PVS_proxy = struct
     open S.PVS_proxy
 
     let path = ref "/opt/citrix/pvsproxy/socket/pvsproxy"
+    
+    let do_call call =
+            let timebox ~timeout f =
+                let fd_in, fd_out = Unix.pipe () in
+                let _ =  Thread.create
+                    (fun () ->
+                    f;
+                    debug "Complete execution in thread.";
+                    Unix.close fd_out) () in
+                if Thread.wait_timed_read fd_in timeout then
+                    debug "Timed execution completion."
+                else
+                    debug "Timed execution timed out.";
+                Unix.close fd_in
+            in
+            
+            let rpc_call =
+                try
+                    Jsonrpc_client.with_rpc ~path:!path ~call ()
+                with e ->
+                    error "Error when calling PVS proxy: %s" (Printexc.to_string e);
+                    raise PVS_proxy_connection_error
+            in
 
-	let do_call call =
-		try
-			Jsonrpc_client.with_rpc ~path:!path ~call ()
-		with e ->
-			error "Error when calling PVS proxy: %s" (Printexc.to_string e);
-			raise PVS_proxy_connection_error
+            timebox ~timeout:!pvsproxy_rpc_timeout rpc_call
 
 	let configure_site dbg config =
 		debug "Configuring PVS proxy for site %s" config.site_uuid;
