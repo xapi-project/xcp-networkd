@@ -1016,20 +1016,31 @@ module PVS_proxy = struct
     
     let do_call call =
             let timebox ~timeout f =
-                let fd_in, fd_out = Unix.pipe () in
+				let fd_mutex = Xapi_stdext_threads.Threadext.Mutex.create () in
+				let fd_in, fd_out = Unix.pipe () in
+				let fd_closed = ref false in
+				let close_fd fd = Xapi_stdext_threads.Threadext.Mutex.execute fd_mutex
+					( fun () ->
+						if not !fd_closed then begin
+							fd_closed := true;
+							Unix.close fd
+						end
+					)
+				in
                 let _ =  Thread.create
                     (fun () ->
-                    f;
+                    f ();
                     debug "Complete execution in thread.";
-                    Unix.close fd_out) () in
+                    close_fd fd_out) () in
                 if Thread.wait_timed_read fd_in timeout then
                     debug "Timed execution completion."
                 else
                     debug "Timed execution timed out.";
-                Unix.close fd_in
+                Unix.close fd_in;
+                close_fd fd_out
             in
             
-            let rpc_call =
+            let rpc_call () =
                 try
                     Jsonrpc_client.with_rpc ~path:!path ~call ()
                 with e ->
