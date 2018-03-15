@@ -60,6 +60,8 @@ let options = [
 	"igmp-query-maxresp-time", Arg.Set_string Network_utils.igmp_query_maxresp_time, (fun () -> !Network_utils.igmp_query_maxresp_time), "Maximum Response Time in IGMP Query message to send";
 	"enable-ipv6-mcast-snooping", Arg.Bool (fun x -> Network_utils.enable_ipv6_mcast_snooping := x), (fun () -> string_of_bool !Network_utils.enable_ipv6_mcast_snooping), "IPv6 multicast snooping toggle";
 	"mcast-snooping-disable-flood-unregistered", Arg.Bool (fun x -> Network_utils.mcast_snooping_disable_flood_unregistered := x), (fun () -> string_of_bool !Network_utils.mcast_snooping_disable_flood_unregistered), "Set OVS bridge configuration mcast-snooping-disable-flood-unregistered as 'true' or 'false'";
+    "pvsproxy-rpc-timeout", Arg.Set_float Network_server.pvsproxy_rpc_timeout, (fun () -> string_of_float !Network_server.pvsproxy_rpc_timeout),
+    "Time out value of xcp-networkd to pvsproxy RPC all in float.";
 ]
 
 let start server =
