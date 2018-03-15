@@ -1010,45 +1010,53 @@ end
 module S = Network_interface.Interface_API(Idl.GenServerExn ())
 
 module PVS_proxy = struct
-    open S.PVS_proxy
+	open S.PVS_proxy
 
-    let path = ref "/opt/citrix/pvsproxy/socket/pvsproxy"
-    
-    let do_call call =
-            let timebox ~timeout f =
-				let fd_mutex = Xapi_stdext_threads.Threadext.Mutex.create () in
-				let fd_in, fd_out = Unix.pipe () in
-				let fd_closed = ref false in
-				let close_fd fd = Xapi_stdext_threads.Threadext.Mutex.execute fd_mutex
-					( fun () ->
-						if not !fd_closed then begin
-							fd_closed := true;
-							Unix.close fd
-						end
-					)
-				in
-                let _ =  Thread.create
-                    (fun () ->
-                    f ();
-                    debug "Complete execution in thread.";
-                    close_fd fd_out) () in
-                if Thread.wait_timed_read fd_in timeout then
-                    debug "Timed execution completion."
-                else
-                    debug "Timed execution timed out.";
-                Unix.close fd_in;
-                close_fd fd_out
-            in
-            
-            let rpc_call () =
-                try
-                    Jsonrpc_client.with_rpc ~path:!path ~call ()
-                with e ->
-                    error "Error when calling PVS proxy: %s" (Printexc.to_string e);
-                    raise PVS_proxy_connection_error
-            in
+	let path = ref "/opt/citrix/pvsproxy/socket/pvsproxy"
 
-            timebox ~timeout:!pvsproxy_rpc_timeout rpc_call
+	let do_call call =
+		(* To prevent the call stuck due to network or far end reason,
+		 * time box the RPC call by creating another thread to run it.
+		 * Pipe is used to sync the threads, when the working one is finished. *)
+		let timebox ~timeout f =
+			(* Mutex is used to guard the closing of fd_out in case of racing condition 
+			 * between the two threads against double close, whereas some other threads might
+			 * create fd that is just the same (as it is integar). *)
+			let fd_mutex = Xapi_stdext_threads.Threadext.Mutex.create () in
+			let fd_in, fd_out = Unix.pipe () in
+			let fd_closed = ref false in
+			let close_fd fd = Xapi_stdext_threads.Threadext.Mutex.execute fd_mutex
+				( fun () ->
+					if not !fd_closed then begin
+						fd_closed := true;
+						Unix.close fd
+					end
+				)
+			in
+			let _ =  Thread.create
+				(fun () ->
+					f ();
+					debug "Complete execution in thread.";
+					close_fd fd_out) () 
+			in
+			if Thread.wait_timed_read fd_in timeout then
+				debug "Timed execution completion."
+			else
+				debug "Timed execution timed out.";
+			Unix.close fd_in;
+			(* close the fd_out in case the other thread stuck long and causing fd leak *)
+			close_fd fd_out
+		in
+
+		let rpc_call () =
+			try
+				Jsonrpc_client.with_rpc ~path:!path ~call ()
+			with e ->
+				error "Error when calling PVS proxy: %s" (Printexc.to_string e);
+				raise PVS_proxy_connection_error
+		in
+
+		timebox ~timeout:!pvsproxy_rpc_timeout rpc_call
 
 	let configure_site dbg config =
 		debug "Configuring PVS proxy for site %s" config.site_uuid;
