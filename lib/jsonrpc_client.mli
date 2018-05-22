@@ -12,6 +12,9 @@
  * GNU Lesser General Public License for more details.
  *)
 
+exception Timeout
+exception Read_error
+
 val json_rpc_max_len : int ref
 val json_rpc_read_timeout : string ref
 val json_rpc_write_timeout : string ref
