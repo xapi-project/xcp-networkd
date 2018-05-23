@@ -21,8 +21,8 @@ exception Timeout
 exception Read_error
 
 let json_rpc_max_len = ref 65536 (* Arbitrary maximum length of RPC response *)
-let json_rpc_read_timeout = ref "60000000000"
-let json_rpc_write_timeout = ref "60000000000"
+let json_rpc_read_timeout = ref 60000000000L
+let json_rpc_write_timeout = ref 60000000000L
 
 let to_s  s = (Int64.to_float s) *. 1e-9
 
@@ -65,7 +65,7 @@ let timeout_read fd timeout =
 						Buffer.add_subbytes buf bytes 0 n;
 						inner remain_time (max_bytes - n)
 					end
-				| exception Unix.Unix_error(err,_,_) when err = Unix.EAGAIN || err = Unix.EWOULDBLOCK ->
+				| exception Unix.Unix_error((Unix.EAGAIN | Unix.EWOULDBLOCK | Unix.EINTR),_,_) ->
 					inner remain_time max_bytes
 		end
 		else inner remain_time max_bytes
@@ -97,8 +97,7 @@ let timeout_write filedesc total_length data response_time =
 			let length = total_length - offset in
 			let bytes_written = 
 				(try Unix.single_write filedesc data offset length with 
-				| Unix.Unix_error(Unix.EAGAIN,_,_)
-				| Unix.Unix_error(Unix.EWOULDBLOCK,_,_) -> 0)
+				| Unix.Unix_error((Unix.EAGAIN | Unix.EWOULDBLOCK | Unix.EINTR),_,_) -> 0)
 			in
 			let new_offset = offset + bytes_written in
 			if length = bytes_written then ()
@@ -113,7 +112,7 @@ let with_rpc ?(version=Jsonrpc.V2) ~path ~call () =
 	Open_uri.with_open_uri uri (fun s ->
 		Unix.set_nonblock s;
 		let req = Bytes.of_string (Jsonrpc.string_of_call ~version call) in
-		timeout_write s (Bytes.length req) req (Int64.of_string !json_rpc_write_timeout);
-		let res = timeout_read s (Int64.of_string !json_rpc_read_timeout) in
+		timeout_write s (Bytes.length req) req !json_rpc_write_timeout;
+		let res = timeout_read s !json_rpc_read_timeout in
 		debug "Response: %s" res;
 		Jsonrpc.response_of_string res)
