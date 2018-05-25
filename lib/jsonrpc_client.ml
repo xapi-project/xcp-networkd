@@ -21,8 +21,8 @@ exception Timeout
 exception Read_error
 
 let json_rpc_max_len = ref 65536 (* Arbitrary maximum length of RPC response *)
-let json_rpc_read_timeout = ref 60000000000L
-let json_rpc_write_timeout = ref 60000000000L
+let json_rpc_read_timeout = ref 60000000000L (* timeout value in ns when reading RPC response *)
+let json_rpc_write_timeout = ref 60000000000L (* timeout value in ns when writing RPC request *)
 
 let to_s  s = (Int64.to_float s) *. 1e-9
 
@@ -34,7 +34,7 @@ let timeout_read fd timeout =
 	let rec inner max_time max_bytes =
 		let (ready_to_read, _, _) = try Unix.select [fd] [] [] (to_s max_time) with
 			(* in case the unix.select call fails in situation like interrupt *)
-			| _ -> [], [], []
+			| Unix.Unix_error(Unix.EINTR,_,_) -> [], [], []
 		in
 		(* This is not accurate the calculate time just for the select part. However, we
 		 * think the read time will be minor comparing to the scale of tens of seconds.
@@ -81,7 +81,7 @@ let timeout_write filedesc total_length data response_time =
 	let rec inner_write offset max_time =
 		let (_, ready_to_write, _) = try Unix.select [] [filedesc] [] (to_s max_time) with
 			(* in case the unix.select call fails in situation like interrupt *)
-			| _ -> [], [], []
+			| Unix.Unix_error(Unix.EINTR,_,_) -> [], [], []
 		in
 		let remain_time = 
 			let used_time = get_total_used_time () in
