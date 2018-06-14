@@ -26,6 +26,40 @@ let json_rpc_write_timeout = ref 60000000000L (* timeout value in ns when writin
 
 let to_s  s = (Int64.to_float s) *. 1e-9
 
+let retrieve_json_str str =
+	let buf = Buffer.create 1024 in
+	let fetch_indx = ref 0 in
+	let str_len = String.length str in
+	let input_char () =
+		if !fetch_indx < str_len then
+		begin
+			let chr = String.get str !fetch_indx in
+			fetch_indx := !fetch_indx + 1;
+			chr
+		end
+		else raise Yojson.End_of_input
+	in
+	let brace_cnt = ref (-1) in (* made to tolerant heading space *)
+	let in_string = ref false in
+	let last_char () = Buffer.nth buf (Buffer.length buf - 1) in
+	let rec get () =
+		let c = input_char () in
+		begin
+			match c with
+			| '{' when not !in_string ->
+				if !brace_cnt = -1 then brace_cnt := 1
+				else brace_cnt := !brace_cnt + 1
+			| '}' when not !in_string -> brace_cnt := !brace_cnt - 1
+			| '"' when !in_string && (last_char () <> '\\') -> in_string := false
+			| '"' when not !in_string -> in_string := true
+			| _ -> ()
+		end;
+		Buffer.add_char buf c;
+		if !brace_cnt <> 0 then get ()
+	in
+	get ();
+	Buffer.contents buf
+
 (* Read the entire contents of the fd, of unknown length *)
 let timeout_read fd timeout =
 	let buf = Buffer.create !json_rpc_max_len in
@@ -113,6 +147,7 @@ let with_rpc ?(version=Jsonrpc.V2) ~path ~call () =
 		Unix.set_nonblock s;
 		let req = Bytes.of_string (Jsonrpc.string_of_call ~version call) in
 		timeout_write s (Bytes.length req) req !json_rpc_write_timeout;
-		let res = timeout_read s !json_rpc_read_timeout in
-		debug "Response: %s" res;
+		let buff = timeout_read s !json_rpc_read_timeout in
+		debug "Response: %s" buff;
+		let res = retrieve_json_str buff in
 		Jsonrpc.response_of_string res)
