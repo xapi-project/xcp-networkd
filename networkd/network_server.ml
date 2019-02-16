@@ -355,15 +355,15 @@ module Interface = struct
             ignore (Dhclient.stop ~ipv6:true name);
           Sysctl.set_ipv6_autoconf name false;
           (* add the link_local and clean the old one only when needed *)
-          let cur_addrs =
-            let addrs = Ip.get_ipv6 name in
+          let cur_addrs = Ip.get_ipv6 name in
+          let target_addrs =
             let maybe_link_local = Ip.split_addr (Ip.get_ipv6_link_local_addr name) in
             match maybe_link_local with
             | Some addr -> Xapi_stdext_std.Listext.List.setify (addr :: addrs)
             | None -> addrs
           in
-          let rm_addrs = Xapi_stdext_std.Listext.List.set_difference cur_addrs addrs in
-          let add_addrs = Xapi_stdext_std.Listext.List.set_difference addrs cur_addrs in
+          let rm_addrs = Xapi_stdext_std.Listext.List.set_difference cur_addrs target_addrs in
+          let add_addrs = Xapi_stdext_std.Listext.List.set_difference target_addrs cur_addrs in
           List.iter (Ip.del_ip_addr name) rm_addrs;
           List.iter (Ip.set_ip_addr name) add_addrs
       end
