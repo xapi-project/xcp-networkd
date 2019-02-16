@@ -303,9 +303,10 @@ module Interface = struct
 
   let set_ipv6_conf _ dbg ~name ~conf =
     Debug.with_thread_associated dbg (fun () ->
-      if Proc.get_ipv6_disabled () then
-        warn "Not configuring IPv6 address for %s (IPv6 is disabled)" name
-      else begin
+      if Proc.get_ipv6_globally_disabled () then begin
+        warn "Not configuring IPv6 address for %s (IPv6 is disabled)" name;
+        Sysctl.set_ipv6_enabled name false;
+      end else begin
         debug "Configuring IPv6 address for %s: %s" name (conf |> Rpcmarshal.marshal typ_of_ipv6 |> Jsonrpc.to_string);
         update_config name {(get_config name) with ipv6_conf = conf};
         match conf with
@@ -314,17 +315,26 @@ module Interface = struct
             if Dhclient.is_running ~ipv6:true name then
               ignore (Dhclient.stop ~ipv6:true name);
             Sysctl.set_ipv6_autoconf name false;
-            Ip.flush_ip_addr ~ipv6:true name
+            Ip.flush_ip_addr ~ipv6:true name;
+            Sysctl.set_ipv6_enabled name false
           end
         | Linklocal6 ->
           if List.mem name (Sysfs.list ()) then begin
+            (* xapi sets Linklocal6 if IPv6 has not been configured;
+             * if IPv6 is not enabled globally, leave it disabled *)
             if Dhclient.is_running ~ipv6:true name then
               ignore (Dhclient.stop ~ipv6:true name);
-            Sysctl.set_ipv6_autoconf name false;
-            Ip.flush_ip_addr ~ipv6:true name;
-            Ip.set_ipv6_link_local_addr name
+            if Proc.get_ipv6_default_disabled () then
+              Sysctl.set_ipv6_enabled name false
+            else begin
+              Sysctl.set_ipv6_enabled name true;
+              Sysctl.set_ipv6_autoconf name false;
+              Ip.flush_ip_addr ~ipv6:true name;
+              Ip.set_ipv6_link_local_addr name
+            end
           end
         | DHCP6 ->
+          Sysctl.set_ipv6_enabled name true;
           if Dhclient.is_running ~ipv6:true name then
             ignore (Dhclient.stop ~ipv6:true name);
           Sysctl.set_ipv6_autoconf name false;
@@ -332,6 +342,7 @@ module Interface = struct
           Ip.set_ipv6_link_local_addr name;
           ignore (Dhclient.start ~ipv6:true name [])
         | Autoconf6 ->
+          Sysctl.set_ipv6_enabled name true;
           if Dhclient.is_running ~ipv6:true name then
             ignore (Dhclient.stop ~ipv6:true name);
           Ip.flush_ip_addr ~ipv6:true name;
@@ -339,6 +350,7 @@ module Interface = struct
           Sysctl.set_ipv6_autoconf name true;
           (* Cannot link set down/up due to CA-89882 - IPv4 default route cleared *)
         | Static6 addrs ->
+          Sysctl.set_ipv6_enabled name true;
           if Dhclient.is_running ~ipv6:true name then
             ignore (Dhclient.stop ~ipv6:true name);
           Sysctl.set_ipv6_autoconf name false;
@@ -359,7 +371,7 @@ module Interface = struct
 
   let set_ipv6_gateway _ dbg ~name ~address =
     Debug.with_thread_associated dbg (fun () ->
-      if Proc.get_ipv6_disabled () then
+      if Proc.get_ipv6_globally_disabled () then
         warn "Not configuring IPv6 gateway for %s (IPv6 is disabled)" name
       else begin
         debug "Configuring IPv6 gateway for %s: %s" name (Unix.string_of_inet_addr address);

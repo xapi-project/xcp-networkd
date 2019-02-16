@@ -821,6 +821,15 @@ module Sysctl = struct
   let write value variable =
     ignore (call_script sysctl ["-q"; "-w"; variable ^ "=" ^ value])
 
+  let set_ipv6_enabled interface value =
+    try
+      let variable = "net.ipv6.conf." ^ interface ^ ".disable_ipv6" in
+      let value' = if value then "0" else "1" in
+      write value' variable
+    with
+    | e when value = true -> raise e
+    | _ -> ()
+
   let set_ipv6_autoconf interface value =
     try
       let variables = [
@@ -885,12 +894,17 @@ module Proc = struct
       error "Error: could not read /proc/net/vlan/config";
       []
 
-  let get_ipv6_disabled () =
+  let get_ipv6_default_disabled () =
     try
-      Unixext.string_of_file "/proc/sys/net/ipv6/conf/all/disable_ipv6"
+      Unixext.string_of_file "/proc/sys/net/ipv6/conf/default/disable_ipv6"
       |> String.trim
       |> (=) "1"
     with _ -> false
+
+  let get_ipv6_globally_disabled () =
+    let file = String.trim (try Unixext.string_of_file "/etc/sysconfig/network" with _ -> "") in
+    let lines = List.map String.trim (Astring.String.cuts ~empty:false ~sep:"\n" file) in
+    List.mem "NETWORKING_IPV6=NO" lines
 end
 
 module Ovs = struct
