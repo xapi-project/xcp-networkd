@@ -48,10 +48,17 @@ let read_management_conf () =
 					else None
 				in
 				let nameservers =
-					if List.mem_assoc "DNS" args && List.assoc "DNS" args <> "" then
-						List.map Unix.inet_addr_of_string (String.split ',' (List.assoc "DNS" args))
+					if List.mem_assoc "DNS1" args && List.assoc "DNS1" args <> "" then
+						args |> List.fold_left (fun accum (k, v) ->
+							try Scanf.sscanf k "DNS%d" (fun i -> (i, String.split ',' v) :: accum)
+							with _ -> accum) []
+						|> List.sort (fun (k1, _) (k2, _) -> k1-k2)
+						|> List.map snd |> List.concat
+					else if List.mem_assoc "DNS" args && List.assoc "DNS" args <> "" then
+						String.split ',' (List.assoc "DNS" args)
 					else []
 				in
+				let nameservers = List.map Unix.inet_addr_of_string nameservers in
 				let domains =
 					if List.mem_assoc "DOMAIN" args && List.assoc "DOMAIN" args <> "" then
 						String.split ' ' (List.assoc "DOMAIN" args)
