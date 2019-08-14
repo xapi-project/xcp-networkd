@@ -70,7 +70,7 @@ let read_management_conf () =
 				DHCP4, None, ([], [])
 		in
 		let phy_interface = {default_interface with persistent_i = true} in
-		let bridge_interface = {default_interface with ipv4_conf; ipv4_gateway; persistent_i = true} in
+		let bridge_interface = {default_interface with ipv4_conf; ipv4_gateway; persistent_i = true; dns} in
 		let bridge = {default_bridge with
 			bridge_mac = Some mac;
 			ports = [device, {default_port with interfaces = [device]}];
