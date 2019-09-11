@@ -37,6 +37,10 @@ let bonding_dir = "/proc/net/bonding/"
 let fcoedriver = ref "/opt/xensource/libexec/fcoe_driver"
 let mac_table_size = ref 10000
 
+let rec assoc_opt x = function
+    [] -> None
+  | (a,b)::l -> if compare a x = 0 then Some b else assoc_opt x l
+
 let call_script ?(log_successful_output=false) ?(timeout=Some 60.0) script args =
 	try
 		Unix.access script [ Unix.X_OK ];
@@ -861,6 +865,12 @@ module Ovs = struct
 			with _ -> ());
 		) phy_interfaces
 
+  let create_port_arg ?ty name bridge =
+    let type_args = match ty with
+      | None | Some "" -> []
+      | Some s -> ["--"; "set"; "interface"; name; Printf.sprintf "type=%s" s] in
+    ["--"; "--may-exist"; "add-port"; bridge; name] @ type_args
+
 	let create_bridge ?mac ?external_id ?disable_in_band ~fail_mode vlan vlan_bug_workaround name =
 		let vlan_arg = match vlan with
 			| None -> []
@@ -896,7 +906,15 @@ module Ovs = struct
 		in
 		let vif_arg =
 			let existing_vifs = List.filter (fun iface -> not (Sysfs.is_physical iface)) (bridge_to_interfaces name) in
-			List.flatten (List.map (fun vif -> ["--"; "--may-exist"; "add-port"; name; vif]) existing_vifs)
+        let ifaces_with_type =
+          let raw = vsctl ~log:false ["--bare"; "-f"; "table"; "--"; "--columns=name,type"; "find"; "interface"; {|type!=\"\"|}] in
+          let lines = String.trim raw |> fun x -> Stringext.split x ~on:'\n' |> List.filter (fun x -> x <> "") in
+          let parse l = match Stringext.cut ~on:" " l with
+            | Some (k, v) -> let k' = String.trim k and v' = String.trim v in if k' = "" || v' = "" then None else Some(k', v')
+            | None -> None in
+          List.filter_map parse lines
+        in
+        List.flatten (List.map (fun vif -> create_port_arg ?ty:(assoc_opt vif ifaces_with_type) vif name) existing_vifs)
 		in
 		let del_old_arg =
 			if vlan <> None then
@@ -948,9 +966,8 @@ module Ovs = struct
 		with _ -> []
 
 	let create_port ?(internal=false) name bridge =
-		let type_args =
-			if internal then ["--"; "set"; "interface"; name; "type=internal"] else [] in
-		vsctl ~log:true (["--"; "--may-exist"; "add-port"; bridge; name] @ type_args)
+    let ty = if internal then Some "internal" else None in
+    vsctl (create_port_arg ?ty name bridge)
 
 	let destroy_port name =
 		vsctl ~log:true ["--"; "--with-iface"; "--if-exists"; "del-port"; name]
