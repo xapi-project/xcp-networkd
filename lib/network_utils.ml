@@ -906,15 +906,15 @@ module Ovs = struct
 		in
 		let vif_arg =
 			let existing_vifs = List.filter (fun iface -> not (Sysfs.is_physical iface)) (bridge_to_interfaces name) in
-        let ifaces_with_type =
-          let raw = vsctl ~log:false ["--bare"; "-f"; "table"; "--"; "--columns=name,type"; "find"; "interface"; {|type!=\"\"|}] in
-          let lines = String.trim raw |> fun x -> Stringext.split x ~on:'\n' |> List.filter (fun x -> x <> "") in
-          let parse l = match Stringext.cut ~on:" " l with
-            | Some (k, v) -> let k' = String.trim k and v' = String.trim v in if k' = "" || v' = "" then None else Some(k', v')
-            | None -> None in
-          List.filter_map parse lines
-        in
-        List.flatten (List.map (fun vif -> create_port_arg ?ty:(assoc_opt vif ifaces_with_type) vif name) existing_vifs)
+				let ifaces_with_type =
+					let raw = vsctl ~log:false ["--bare"; "-f"; "table"; "--"; "--columns=name,type"; "find"; "interface"; {|type!=\"\"|}] in
+					let lines = String.trim raw |> fun x -> Stringext.split x ~on:'\n' |> List.filter (fun x -> x <> "") in
+					let parse l = match Stringext.cut ~on:" " l with
+						| Some (k, v) -> let k' = String.trim k and v' = String.trim v in if k' = "" || v' = "" then None else Some(k', v')
+						| None -> None in
+					List.filter_map parse lines
+				in
+				List.flatten (List.map (fun vif -> create_port_arg ?ty:(assoc_opt vif ifaces_with_type) vif name) existing_vifs)
 		in
 		let del_old_arg =
 			if vlan <> None then
