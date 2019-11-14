@@ -906,19 +906,27 @@ module Ovs = struct
 		in
 		let vif_arg =
 			let existing_vifs = List.filter (fun iface -> not (Sysfs.is_physical iface)) (bridge_to_interfaces name) in
-        let ifaces_with_type =
-          let raw = vsctl ~log:false ["--bare"; "-f"; "table"; "--"; "--columns=name,type"; "find"; "interface"; {|type!=\"\"|}] in
-          let lines = String.trim raw |> fun x -> Stringext.split x ~on:'\n' |> List.filter (fun x -> x <> "") in
-          let parse l = match Stringext.cut ~on:" " l with
-            | Some (k, v) -> let k' = String.trim k and v' = String.trim v in if k' = "" || v' = "" then None else Some(k', v')
-            | None -> None in
-          List.filter_map parse lines
-        in
-        List.flatten (List.map (fun vif -> create_port_arg ?ty:(assoc_opt vif ifaces_with_type) vif name) existing_vifs)
+				let ifaces_with_type =
+					let raw = vsctl ~log:false ["--bare"; "-f"; "table"; "--"; "--columns=name,type"; "find"; "interface"; {|type!=\"\"|}] in
+					let lines = String.trim raw |> fun x -> Stringext.split x ~on:'\n' |> List.filter (fun x -> x <> "") in
+					let parse l = match Stringext.cut ~on:" " l with
+						| Some (k, v) -> let k' = String.trim k and v' = String.trim v in if k' = "" || v' = "" then None else Some(k', v')
+						| None -> None in
+					List.filter_map parse lines
+				in
+				List.flatten (List.map (fun vif -> create_port_arg ?ty:(assoc_opt vif ifaces_with_type) vif name) existing_vifs)
 		in
 		let del_old_arg =
-			if vlan <> None then
-				(* This is to handle the case that a "real" bridge (not a "fake" VLAN bridge) already exists *)
+			let real_bridge_exists () =
+				try
+					(* `ovs-vsctl br-to-parent <name>` returns <name> if <name> is a current "real" bridge *)
+					vsctl ~log:false ["br-to-parent"; name] |> String.trim = name
+				with _ -> false
+			in
+			if vlan <> None && real_bridge_exists () then
+			  (* This is to handle the case that a "real" bridge (not a "fake" VLAN bridge)
+			     already exists, while we need to create a VLAN bridge with the same name.
+			     The bridge will be destroyed and recreated, and the interfaces on it are put back. *)
 				["--"; "--if-exists"; "del-br"; name]
 			else
 				[]
