@@ -760,7 +760,8 @@ struct
       else (debug "%s is NOT the DNS interface" interface; [])
     in
     let request = minimal @ set_gateway @ set_dns in
-    Printf.sprintf "interface \"%s\" {\n  send %s;\n  request %s;\n}\n" interface send (String.concat ", " request)
+    Printf.sprintf "interface \"%s\" {\n  send %s;\n  request %s;\n}\n"
+      interface send (String.concat ", " request)
 
   let read_conf_file ?(ipv6=false) interface =
     let file = conf_file ~ipv6 interface in
