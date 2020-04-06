@@ -50,9 +50,7 @@ let test_lacp_aggregation_key arg () =
 module OVS_Cli_test = struct
   include Ovs.Cli
   let vsctl_output = ref []
-  let vsctl ?log args =
-    (* Ignore unused argument to avoid warning under dune's default settings. *)
-    ignore log;
+  let vsctl ?log:_ args =
     vsctl_output := args ;
     String.concat " " args
 end
