@@ -51,7 +51,7 @@ module OVS_Cli_test = struct
   include Ovs.Cli
   let vsctl_output = ref []
   let vsctl ?log args =
-    ignore(log);
+    ignore log;
     vsctl_output := args ;
     String.concat " " args
 end
