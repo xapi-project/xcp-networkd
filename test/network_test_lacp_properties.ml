@@ -51,6 +51,7 @@ module OVS_Cli_test = struct
   include Ovs.Cli
   let vsctl_output = ref []
   let vsctl ?log args =
+    (* Ignore unused argument to avoid warning under dune's default settings. *)
     ignore log;
     vsctl_output := args ;
     String.concat " " args
