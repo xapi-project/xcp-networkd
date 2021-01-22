@@ -919,7 +919,13 @@ end = struct
         []
       )
     in
-    let request = minimal @ set_gateway @ set_dns in
+    let ipv6_fields =
+      if ipv6 then
+        ["dhcp6.client-id"; "dhcp6.domain-search"; "dhcp6.name-servers"]
+      else
+        []
+    in
+    let request = minimal @ set_gateway @ set_dns @ ipv6_fields in
     Printf.sprintf "interface \"%s\" {\n  send %s;\n  request %s;\n}\n"
       interface send
       (String.concat ", " request)
