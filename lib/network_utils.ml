@@ -925,7 +925,7 @@ end = struct
       else
         []
     in
-    let request = minimal @ set_gateway @ set_dns @ ipv6_fields in
+    let request = List.flatten [minimal; set_gateway; set_dns; ipv6_fields] in
     Printf.sprintf "interface \"%s\" {\n  send %s;\n  request %s;\n}\n"
       interface send
       (String.concat ", " request)
