@@ -684,8 +684,7 @@ module Interface = struct
                        fields. *)
                     match (ipv4_conf, ipv6_conf) with
                     | (Static4 _, _)
-                    | (_, Static6 _)
-                    | (_, Autoconf6) -> set_dns () dbg ~name ~nameservers ~domains
+                    | (_, Static6 _) -> set_dns () dbg ~name ~nameservers ~domains
                     | _ -> ());
                 exec (fun () -> set_ipv4_conf dbg name ipv4_conf) ;
                 exec (fun () ->

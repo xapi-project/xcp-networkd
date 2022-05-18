@@ -888,18 +888,32 @@ end = struct
       (Printf.sprintf "dhclient%s-%s.conf" ipv6' interface)
 
   let[@warning "-27"] generate_conf ?(ipv6 = false) interface options =
-    let send = "host-name = gethostname()" in
+    let send = "fqdn.fqdn = gethostname()" in
     let minimal =
       [
         "subnet-mask"
       ; "broadcast-address"
       ; "time-offset"
       ; "host-name"
-      ; "nis-domain"
-      ; "nis-servers"
-      ; "ntp-servers"
       ; "interface-mtu"
       ]
+    in
+    let family_minimal =
+      if ipv6 then
+        [
+          "dhcp6.nis-servers"
+        ; "dhcp6.nisp-servers"
+        ; "nis-domain-name"
+        ; "nisp-domain-name"
+        ; "dhcp6.sntp-servers"
+        ; "dhcp6.fqdn"
+        ]
+      else
+        [
+          "nis-domain"
+        ; "nis-servers"
+        ; "ntp-servers"
+        ]
     in
     let set_gateway =
       if List.mem (`gateway interface) options then (
@@ -913,19 +927,16 @@ end = struct
     let set_dns =
       if List.mem (`dns interface) options then (
         debug "%s is the DNS interface" interface ;
-        ["domain-name"; "domain-name-servers"]
+        if ipv6 then
+          ["dhcp6.domain-search"; "dhcp6.name-servers"]
+        else
+          ["domain-name"; "domain-name-servers"]
       ) else (
         debug "%s is NOT the DNS interface" interface ;
         []
       )
     in
-    let ipv6_fields =
-      if ipv6 then
-        ["dhcp6.client-id"; "dhcp6.domain-search"; "dhcp6.name-servers"]
-      else
-        []
-    in
-    let request = List.flatten [minimal; set_gateway; set_dns; ipv6_fields] in
+    let request = List.flatten [minimal; family_minimal; set_gateway; set_dns] in
     Printf.sprintf "interface \"%s\" {\n  send %s;\n  request %s;\n}\n"
       interface send
       (String.concat ", " request)
